@@ -4,11 +4,13 @@ Automated title search bot for Hillsborough County, Florida public records.
 
 ## Features
 
-- Search by property owner name
-- Filter by document type (Deeds, Mortgages, Liens, etc.)
-- Download and organize PDFs
-- Extract text from documents
-- Generate search packages with chain of title
+- 🔍 Search by property owner name
+- 📋 Automatic document categorization (Deeds, Mortgages, Liens, etc.)
+- ⛓️ Chain of title builder
+- 💰 Open mortgage detection
+- ⚠️ Risk flagging (lis pendens, judgments, quick flips)
+- 📄 PDF viewing via county records
+- 🌐 Modern web interface
 
 ## Quick Start
 
@@ -16,11 +18,38 @@ Automated title search bot for Hillsborough County, Florida public records.
 # Install dependencies
 npm install
 
-# Start the server
+# Start the web server
 npm start
 ```
 
 Then open http://localhost:3000 in your browser.
+
+## CLI Usage
+
+```bash
+# Search for an owner
+npm run search "SMITH JOHN"
+
+# Search with custom year range
+npm run search "SMITH JOHN" 20
+```
+
+## Example Output
+
+```
+📊 SUMMARY
+────────────────────────────────────────
+Total Documents: 436
+Chain of Title:  140 deeds
+Open Mortgages:  1
+Open Liens:      0
+Risk Level:      HIGH
+
+⚠️  FLAGS
+────────────────────────────────────────
+🔴 LIS_PENDENS: Found 3 lis pendens
+🔴 JUDGMENT: Found 88 judgment(s)
+```
 
 ## Project Structure
 
