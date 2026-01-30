@@ -1,37 +1,77 @@
 /**
- * PDF Text Extraction (Node.js version)
- * Extracts text from PDF documents for analysis
- * Note: For Cloudflare Pages, use the client-side version at /public/js/pdfScanner.js
+ * PDF Text Scanner (Client-side)
+ * Uses PDF.js to extract text from PDFs for mortgage/satisfaction matching
  */
 
-import pdfParse from 'pdf-parse';
-import { downloadPdf } from '../api/hillsborough.js';
+// Load PDF.js library
+const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+
+// Configure PDF.js worker
+if (pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
 
 /**
- * Extract text from a document by its ID
- * @param {string} documentId The encoded document ID
- * @returns {Promise<Object>} Extracted text and metadata
+ * Extract text from a PDF document
+ * @param {string} documentId - The encoded document ID
+ * @returns {Promise<Object>} Extraction result
  */
 export async function extractTextFromDocument(documentId) {
+  if (!pdfjsLib) {
+    return { success: false, error: 'PDF.js not loaded', needsManualReview: true };
+  }
+  
   try {
-    // Download the PDF
-    const pdfBuffer = await downloadPdf(documentId);
+    // Fetch PDF through our proxy to avoid CORS (using POST with JSON body)
+    const response = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId })
+    });
     
-    // Parse the PDF
-    const data = await pdfParse(Buffer.from(pdfBuffer));
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Download failed: ${response.status}`);
+    }
     
-    // Check if we got meaningful text
-    const hasText = data.text && data.text.trim().length > 100;
+    const data = await response.json();
+    if (!data.success || !data.pdf) {
+      throw new Error('No PDF data returned');
+    }
+    
+    // Convert base64 back to ArrayBuffer
+    const binaryString = atob(data.pdf);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const arrayBuffer = bytes.buffer;
+    
+    // Load PDF with PDF.js
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    let fullText = '';
+    const numPages = pdf.numPages;
+    
+    // Extract text from each page
+    for (let i = 1; i <= numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map(item => item.str).join(' ');
+      fullText += pageText + '\n';
+    }
+    
+    // Check if we got meaningful text (not a scanned image)
+    const hasText = fullText.trim().length > 100;
     
     return {
       success: true,
-      text: data.text,
-      numPages: data.numpages,
-      info: data.info,
-      metadata: data.metadata,
+      text: fullText,
+      numPages,
       hasText,
       needsManualReview: !hasText
     };
+    
   } catch (error) {
     console.error('PDF extraction error:', error);
     return {
@@ -44,7 +84,7 @@ export async function extractTextFromDocument(documentId) {
 
 /**
  * Parse mortgage document text to extract key information
- * @param {string} text Raw PDF text
+ * @param {string} text - Raw PDF text
  * @returns {Object} Extracted mortgage info
  */
 export function parseMortgageText(text) {
@@ -68,11 +108,17 @@ export function parseMortgageText(text) {
   
   // ===== PRINCIPAL AMOUNT EXTRACTION =====
   const amountPatterns = [
+    // "principal sum of $X" or "principal amount of $X"
     /PRINCIPAL\s+(?:SUM|AMOUNT)\s+(?:OF\s+)?\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // "in the amount of $X"
     /IN\s+THE\s+AMOUNT\s+OF\s+\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // "$X.00 (dollars)"
     /\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)\s*(?:\(|DOLLARS)/i,
+    // "face amount $X"
     /FACE\s+AMOUNT\s*(?:OF\s+)?\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // "loan amount $X"
     /LOAN\s+AMOUNT\s*(?:OF\s+)?\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // Just a large dollar amount (fallback)
     /\$[\s,]*([1-9][0-9]{4,}(?:\.[0-9]{2})?)/i
   ];
   
@@ -80,6 +126,7 @@ export function parseMortgageText(text) {
     const match = text.match(pattern);
     if (match) {
       const amount = parseFloat(match[1].replace(/,/g, ''));
+      // Sanity check: mortgages typically between $10k and $50M
       if (amount >= 10000 && amount <= 50000000) {
         info.principalAmount = amount;
         break;
@@ -89,9 +136,13 @@ export function parseMortgageText(text) {
   
   // ===== LENDER NAME EXTRACTION =====
   const lenderPatterns = [
+    // "MORTGAGEE: Name" or "Lender: Name"
     /(?:MORTGAGEE|LENDER)\s*[:\s]+([A-Z][A-Z0-9\s,\.&'-]+?)(?:\s*[,\n]|$)/i,
+    // "in favor of Name"
     /IN\s+FAVOR\s+OF\s+([A-Z][A-Z0-9\s,\.&'-]+?)(?:\s*[,\n]|ITS|A\s+)/i,
+    // Common bank names
     /(WELLS\s+FARGO[A-Z\s,\.&'-]*BANK|BANK\s+OF\s+AMERICA[A-Z\s,\.&'-]*|CHASE\s+[A-Z\s,\.&'-]*BANK|JPMORGAN[A-Z\s,\.&'-]*|QUICKEN\s+LOANS|ROCKET\s+MORTGAGE|UNITED\s+SHORE|CALIBER\s+HOME|FREEDOM\s+MORTGAGE|PENNYMAC|GUILD\s+MORTGAGE|CROSSCOUNTRY\s+MORTGAGE|MOVEMENT\s+MORTGAGE|LOAN\s*DEPOT|NAVY\s+FEDERAL|USAA|FIFTH\s+THIRD|PNC\s+BANK|REGIONS\s+BANK|SUNTRUST|TRUIST|CITIZENS\s+BANK)/i,
+    // "National Association" banks
     /([A-Z][A-Z\s&'-]+,?\s*N\.?A\.?)/i
   ];
   
@@ -99,6 +150,7 @@ export function parseMortgageText(text) {
     const match = text.match(pattern);
     if (match) {
       const name = match[1].trim().replace(/\s+/g, ' ');
+      // Filter out common false positives
       if (name.length > 3 && !name.match(/^(THE|AND|FOR|THIS|THAT)$/i)) {
         info.lenderName = name;
         break;
@@ -107,10 +159,15 @@ export function parseMortgageText(text) {
   }
   
   // ===== INSTRUMENT REFERENCE EXTRACTION =====
+  // Look for references to prior instruments (for refinances/modifications)
   const refPatterns = [
+    // "Instrument No. XXXXXXXX" or "Inst# XXXXXXXX"
     /INSTRUMENT\s*(?:NO\.?|NUMBER|#)\s*:?\s*([0-9]{6,})/gi,
+    // "recorded in OR Book XXX, Page XXX"
     /(?:RECORDED\s+IN\s+)?(?:OR\s+)?BOOK\s+([0-9]+)\s*,?\s*PAGE\s+([0-9]+)/gi,
+    // "CFN XXXXXXXX" (Clerk's File Number)
     /CFN\s*(?:#|NO\.?)?\s*([0-9]{6,})/gi,
+    // "Document No. XXXXXXXX"
     /DOCUMENT\s*(?:NO\.?|NUMBER|#)\s*:?\s*([0-9]{6,})/gi
   ];
   
@@ -154,7 +211,7 @@ export function parseMortgageText(text) {
 
 /**
  * Parse deed document text to extract key information
- * @param {string} text Raw PDF text
+ * @param {string} text - Raw PDF text
  * @returns {Object} Extracted deed info
  */
 export function parseDeedText(text) {
@@ -163,8 +220,6 @@ export function parseDeedText(text) {
     legalDescription: null,
     propertyAddress: null,
     deedType: null,
-    grantors: [],
-    grantees: [],
     confidence: 'low'
   };
   
@@ -176,9 +231,13 @@ export function parseDeedText(text) {
   
   // ===== CONSIDERATION/SALE PRICE =====
   const considerationPatterns = [
+    // "for and in consideration of $X"
     /FOR\s+AND\s+IN\s+CONSIDERATION\s+OF\s+\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // "consideration of $X"
     /CONSIDERATION\s+(?:OF\s+)?\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // "sum of $X"
     /SUM\s+OF\s+\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i,
+    // Documentary stamp tax (can calculate sale price from this)
     /DOCUMENTARY\s+STAMP(?:S)?\s+\$[\s,]*([0-9,]+(?:\.[0-9]{2})?)/i
   ];
   
@@ -186,7 +245,7 @@ export function parseDeedText(text) {
     const match = text.match(pattern);
     if (match) {
       const amount = parseFloat(match[1].replace(/,/g, ''));
-      if (amount >= 1000) {
+      if (amount >= 1000) { // Reasonable minimum
         info.consideration = amount;
         break;
       }
@@ -204,16 +263,20 @@ export function parseDeedText(text) {
   
   // ===== LEGAL DESCRIPTION =====
   const legalPatterns = [
+    // Lot/Block format
     /(LOT\s+[0-9A-Z]+,?\s*(?:OF\s+)?BLOCK\s+[0-9A-Z]+[^.]*)/i,
+    // Unit/Condo format
     /(UNIT\s+(?:NO\.?\s*)?[0-9A-Z-]+[^.]*(?:CONDOMINIUM|CONDO)[^.]*)/i,
+    // Section/Township/Range
     /(SEC(?:TION)?\s+[0-9]+[^.]*TOWNSHIP\s+[0-9]+[^.]*RANGE\s+[0-9]+[^.]*)/i,
+    // Parcel ID
     /PARCEL\s+(?:ID|IDENTIFICATION|NUMBER|NO\.?)?\s*:?\s*([0-9-]+)/i
   ];
   
   for (const pattern of legalPatterns) {
     const match = text.match(pattern);
     if (match) {
-      info.legalDescription = match[1].trim().substring(0, 200);
+      info.legalDescription = match[1].trim().substring(0, 200); // Limit length
       break;
     }
   }
@@ -246,7 +309,7 @@ export function parseDeedText(text) {
 
 /**
  * Parse satisfaction document text
- * @param {string} text Raw PDF text
+ * @param {string} text - Raw PDF text
  * @returns {Object} Extracted satisfaction info
  */
 export function parseSatisfactionText(text) {
@@ -267,8 +330,11 @@ export function parseSatisfactionText(text) {
   
   // ===== SATISFIED INSTRUMENT REFERENCE =====
   const instrumentPatterns = [
+    // "Instrument No. XXXXXXXX"
     /(?:MORTGAGE|INSTRUMENT|DOCUMENT)\s*(?:NO\.?|NUMBER|#)\s*:?\s*([0-9]{6,})/gi,
+    // "recorded in Book XXX, Page XXX"
     /(?:RECORDED\s+)?(?:IN\s+)?(?:O\.?R\.?\s+)?BOOK\s+([0-9]+)\s*,?\s*PAGE\s+([0-9]+)/gi,
+    // "CFN XXXXXXXX"
     /CFN\s*(?:#|NO\.?)?\s*([0-9]{6,})/gi
   ];
   
@@ -288,6 +354,7 @@ export function parseSatisfactionText(text) {
   const lenderPatterns = [
     /(?:ORIGINALLY\s+)?(?:MADE|EXECUTED)\s+(?:BY\s+.+?\s+)?(?:TO|IN\s+FAVOR\s+OF)\s+([A-Z][A-Z0-9\s,\.&'-]+?)(?:\s*[,\n]|$)/i,
     /(?:MORTGAGEE|LENDER)\s*(?:WAS|:)\s*([A-Z][A-Z0-9\s,\.&'-]+?)(?:\s*[,\n]|$)/i,
+    // Common bank names
     /(WELLS\s+FARGO|BANK\s+OF\s+AMERICA|CHASE|JPMORGAN|QUICKEN|ROCKET|PENNYMAC|CALIBER|FREEDOM\s+MORTGAGE)[A-Z\s,\.&'-]*/i
   ];
   
@@ -337,12 +404,12 @@ export function parseSatisfactionText(text) {
 }
 
 /**
- * Batch extract text from multiple documents
- * @param {Array} documents Array of document objects with documentId
- * @param {Function} onProgress Progress callback (scanned, total, current)
- * @returns {Promise<Object>} Batch extraction results
+ * Batch scan documents for text extraction
+ * @param {Array} documents - Documents to scan (mortgages and satisfactions)
+ * @param {Function} onProgress - Progress callback (scanned, total, current)
+ * @returns {Promise<Object>} Scan results with extracted data
  */
-export async function batchExtractDocuments(documents, onProgress = () => {}) {
+export async function batchScanDocuments(documents, onProgress = () => {}) {
   const results = {
     scanned: 0,
     successful: 0,
@@ -371,12 +438,11 @@ export async function batchExtractDocuments(documents, onProgress = () => {}) {
       
       if (extraction.success && extraction.hasText) {
         // Parse based on document type
-        const docType = doc.docTypeShort || '';
-        if (docType === 'MTG' || docType.includes('MTG')) {
+        if (doc.docTypeShort === 'MTG' || doc.docTypeShort?.includes('MTG')) {
           result.extractedData = parseMortgageText(extraction.text);
-        } else if (docType === 'SAT' || docType.includes('SAT')) {
+        } else if (doc.docTypeShort === 'SAT' || doc.docTypeShort?.includes('SAT')) {
           result.extractedData = parseSatisfactionText(extraction.text);
-        } else if (docType === 'D') {
+        } else if (doc.docTypeShort === 'D') {
           result.extractedData = parseDeedText(extraction.text);
         }
         
@@ -388,7 +454,7 @@ export async function batchExtractDocuments(documents, onProgress = () => {}) {
       results.documents.push(result);
       
     } catch (error) {
-      console.error(`Error extracting ${doc.instrumentNumber}:`, error);
+      console.error(`Error scanning ${doc.instrumentNumber}:`, error);
       results.documents.push({
         ...doc,
         extraction: { success: false, error: error.message, needsManualReview: true }
@@ -397,6 +463,9 @@ export async function batchExtractDocuments(documents, onProgress = () => {}) {
     }
     
     results.scanned++;
+    
+    // Small delay to prevent overwhelming the browser
+    await new Promise(r => setTimeout(r, 100));
   }
   
   onProgress(total, total, null);
@@ -406,9 +475,9 @@ export async function batchExtractDocuments(documents, onProgress = () => {}) {
 
 /**
  * Match satisfactions to mortgages using extracted data
- * @param {Array} mortgages Mortgages with extracted data
- * @param {Array} satisfactions Satisfactions with extracted data
- * @returns {Object} Match results
+ * @param {Array} mortgages - Mortgages with extracted data
+ * @param {Array} satisfactions - Satisfactions with extracted data
+ * @returns {Array} Matched pairs with confidence scores
  */
 export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
   const matches = [];
@@ -436,8 +505,9 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
       
       // Method 2: Book/Page match
       if (satData.satisfiedBookPage && mtg.bookNum && mtg.pageNum) {
-        if (satData.satisfiedBookPage.includes(String(mtg.bookNum)) && 
-            satData.satisfiedBookPage.includes(String(mtg.pageNum))) {
+        const mtgBookPage = `Book ${mtg.bookNum}, Page ${mtg.pageNum}`;
+        if (satData.satisfiedBookPage.includes(mtg.bookNum) && 
+            satData.satisfiedBookPage.includes(mtg.pageNum)) {
           score += 90;
           matchReasons.push('Book/Page match');
         }
@@ -464,7 +534,7 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
         }
       }
       
-      // Method 5: Name match (fallback)
+      // Method 5: Name match (fallback - parties involved)
       const satGrantors = (sat.grantors || []).join(' ').toLowerCase();
       const mtgGrantors = (mtg.grantors || []).join(' ').toLowerCase();
       if (satGrantors && mtgGrantors) {
@@ -476,11 +546,11 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
         }
       }
       
-      // Method 6: Date logic
+      // Method 6: Date logic (satisfaction must be after mortgage)
       if (sat.recordTimestamp > mtg.recordTimestamp) {
         score += 5;
       } else {
-        score -= 20;
+        score -= 20; // Penalty if satisfaction is before mortgage
       }
       
       if (score > bestScore) {
@@ -489,6 +559,7 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
       }
     }
     
+    // Require minimum score for a match
     if (bestMatch && bestScore >= 30) {
       matches.push({
         satisfaction: sat,
@@ -498,6 +569,7 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
         matchReasons: bestMatch.matchReasons
       });
       
+      // Remove from unmatched
       unmatchedMortgages.splice(bestMatch.index, 1);
       usedSatisfactions.add(sat.instrumentNumber);
     }
@@ -510,11 +582,12 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
   };
 }
 
-export default {
+// Export for browser use
+window.PdfScanner = {
   extractTextFromDocument,
-  parseDeedText,
   parseMortgageText,
+  parseDeedText,
   parseSatisfactionText,
-  batchExtractDocuments,
+  batchScanDocuments,
   matchSatisfactionsToMortgages
 };

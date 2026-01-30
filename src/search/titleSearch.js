@@ -4,16 +4,24 @@
  */
 
 import { searchByName, parseRecord, TITLE_DOC_TYPES, DOC_TYPES } from '../api/hillsborough.js';
+import { 
+  batchExtractDocuments, 
+  parseMortgageText, 
+  parseSatisfactionText,
+  matchSatisfactionsToMortgages 
+} from '../documents/pdfExtractor.js';
 
 /**
  * Perform a comprehensive title search for a property
  * @param {Object} params Search parameters
  * @param {string} params.ownerName Current property owner name
  * @param {number} params.yearsBack How many years to search (default 30)
+ * @param {boolean} params.scanDocuments Whether to scan PDFs for text extraction (default false)
+ * @param {Function} params.onProgress Progress callback for scanning
  * @returns {Promise<Object>} Complete search results
  */
 export async function performTitleSearch(params) {
-  const { ownerName, yearsBack = 30 } = params;
+  const { ownerName, yearsBack = 30, scanDocuments = false, onProgress } = params;
   
   // Calculate date range
   const endDate = new Date();
@@ -47,11 +55,48 @@ export async function performTitleSearch(params) {
   // Build chain of title from deeds
   const chainOfTitle = buildChainOfTitle(grouped.deeds || []);
   
-  // Analyze mortgages and satisfactions
-  const mortgageAnalysis = analyzeMortgages(
+  // Initial mortgage analysis (name-based matching)
+  let mortgageAnalysis = analyzeMortgages(
     grouped.mortgages || [],
     grouped.satisfactions || []
   );
+  
+  // PDF Scanning (optional)
+  let scanResults = null;
+  if (scanDocuments && (grouped.mortgages.length > 0 || grouped.satisfactions.length > 0)) {
+    console.log('\nScanning mortgages and satisfactions for text extraction...');
+    
+    const docsToScan = [...grouped.mortgages, ...grouped.satisfactions];
+    scanResults = await batchExtractDocuments(docsToScan, onProgress);
+    
+    console.log(`Scan complete: ${scanResults.successful} extracted, ${scanResults.needsManualReview} need review`);
+    
+    // Extract scanned mortgages and satisfactions
+    const scannedMortgages = scanResults.documents.filter(d => 
+      d.docTypeShort === 'MTG' || (d.docTypeShort && d.docTypeShort.includes('MTG'))
+    );
+    const scannedSatisfactions = scanResults.documents.filter(d => 
+      d.docTypeShort === 'SAT' || (d.docTypeShort && d.docTypeShort.includes('SAT'))
+    );
+    
+    // Re-analyze mortgages with extracted data
+    const matchResults = matchSatisfactionsToMortgages(scannedMortgages, scannedSatisfactions);
+    
+    // Update mortgage analysis with better matching
+    mortgageAnalysis = {
+      total: grouped.mortgages.length,
+      satisfied: matchResults.matches.length,
+      open: matchResults.unmatchedMortgages,
+      satisfiedList: matchResults.matches.map(m => ({
+        mortgage: m.mortgage,
+        satisfaction: m.satisfaction,
+        confidence: m.confidence,
+        matchReasons: m.matchReasons
+      })),
+      unmatchedSatisfactions: matchResults.unmatchedSatisfactions,
+      scanData: scanResults
+    };
+  }
   
   // Identify open liens
   const openLiens = identifyOpenLiens(
@@ -67,7 +112,8 @@ export async function performTitleSearch(params) {
       ownerName,
       yearsBack,
       searchDate: new Date().toISOString(),
-      recordCount: documents.length
+      recordCount: documents.length,
+      scanned: scanDocuments
     },
     documents,
     grouped,
@@ -75,6 +121,7 @@ export async function performTitleSearch(params) {
     mortgageAnalysis,
     openLiens,
     flags,
+    scanResults,
     summary: generateSummary(documents, chainOfTitle, mortgageAnalysis, openLiens, flags)
   };
 }
@@ -104,6 +151,7 @@ function groupByDocType(documents) {
     judgments: [],
     releases: [],
     assignments: [],
+    modifications: [],
     other: []
   };
   
@@ -151,6 +199,9 @@ function groupByDocType(documents) {
       case 'ASINT':
         groups.assignments.push(doc);
         break;
+      case 'MOD':
+        groups.modifications.push(doc);
+        break;
       default:
         groups.other.push(doc);
     }
@@ -186,7 +237,7 @@ function buildChainOfTitle(deeds) {
 }
 
 /**
- * Analyze mortgages and their satisfactions
+ * Analyze mortgages and their satisfactions (name-based fallback)
  */
 function analyzeMortgages(mortgages, satisfactions) {
   const analysis = {
@@ -196,22 +247,54 @@ function analyzeMortgages(mortgages, satisfactions) {
     satisfiedList: []
   };
   
+  // Create a pool of available satisfactions
+  const availableSats = [...satisfactions];
+  
   // For each mortgage, check if there's a matching satisfaction
-  // This is a simplified analysis - real matching would use instrument references
   for (const mtg of mortgages) {
-    // Check if any satisfaction mentions this mortgage or same parties
-    const grantors = mtg.grantors.join(' ').toLowerCase();
-    const matchingSat = satisfactions.find(sat => {
-      const satGrantors = sat.grantors.join(' ').toLowerCase();
-      return satGrantors.includes(grantors.split(' ')[0]) ||
-             grantors.includes(satGrantors.split(' ')[0]);
-    });
+    const mtgGrantors = mtg.grantors.map(g => g.toLowerCase());
     
-    if (matchingSat) {
+    // Find the best matching satisfaction
+    let bestMatchIndex = -1;
+    let bestMatchScore = 0;
+    
+    for (let i = 0; i < availableSats.length; i++) {
+      const sat = availableSats[i];
+      const satGrantors = sat.grantors.map(g => g.toLowerCase());
+      
+      // Calculate match score
+      let score = 0;
+      
+      // Check if satisfaction is after mortgage
+      if (sat.recordTimestamp > mtg.recordTimestamp) {
+        score += 10;
+      }
+      
+      // Check name overlap
+      for (const mtgName of mtgGrantors) {
+        const firstName = mtgName.split(' ')[0];
+        for (const satName of satGrantors) {
+          if (satName.includes(firstName) || firstName.includes(satName.split(' ')[0])) {
+            score += 5;
+          }
+        }
+      }
+      
+      if (score > bestMatchScore) {
+        bestMatchScore = score;
+        bestMatchIndex = i;
+      }
+    }
+    
+    // Require minimum score for a match
+    if (bestMatchIndex >= 0 && bestMatchScore >= 10) {
+      const matchedSat = availableSats.splice(bestMatchIndex, 1)[0];
       analysis.satisfied++;
       analysis.satisfiedList.push({
         mortgage: mtg,
-        satisfaction: matchingSat
+        satisfaction: matchedSat,
+        confidence: 'low', // Name-based matching is low confidence
+        matchMethod: 'name'
       });
     } else {
       analysis.open.push(mtg);
@@ -225,16 +308,33 @@ function analyzeMortgages(mortgages, satisfactions) {
  * Identify liens without releases
  */
 function identifyOpenLiens(liens, releases) {
-  // Similar simplified matching
   const openLiens = [];
+  const availableReleases = [...releases];
   
   for (const lien of liens) {
-    const grantors = lien.grantors.join(' ').toLowerCase();
-    const hasRelease = releases.some(rel => {
-      const relGrantors = rel.grantors.join(' ').toLowerCase();
-      return relGrantors.includes(grantors.split(' ')[0]) ||
-             grantors.includes(relGrantors.split(' ')[0]);
-    });
+    const lienGrantors = lien.grantors.map(g => g.toLowerCase());
+    
+    let hasRelease = false;
+    for (let i = 0; i < availableReleases.length; i++) {
+      const rel = availableReleases[i];
+      const relGrantors = rel.grantors.map(g => g.toLowerCase());
+      
+      // Check if release is after lien and names match
+      if (rel.recordTimestamp > lien.recordTimestamp) {
+        const nameMatch = lienGrantors.some(lienName => {
+          const firstName = lienName.split(' ')[0];
+          return relGrantors.some(relName => 
+            relName.includes(firstName) || firstName.includes(relName.split(' ')[0])
+          );
+        });
+        
+        if (nameMatch) {
+          availableReleases.splice(i, 1);
+          hasRelease = true;
+          break;
+        }
+      }
+    }
     
     if (!hasRelease) {
       openLiens.push(lien);
@@ -303,6 +403,9 @@ function identifyFlags(documents) {
     }
   }
   
+  // Look for multiple open mortgages
+  // This will be more accurate after PDF scanning
+  
   return flags;
 }
 
@@ -317,12 +420,13 @@ function generateSummary(documents, chainOfTitle, mortgageAnalysis, openLiens, f
     totalDocuments: documents.length,
     chainOfTitleLength: chainOfTitle.length,
     totalMortgages: mortgageAnalysis.total,
+    satisfiedMortgages: mortgageAnalysis.satisfied,
     openMortgages: mortgageAnalysis.open.length,
     openLiens: openLiens.length,
     highSeverityFlags: highFlags.length,
     mediumSeverityFlags: mediumFlags.length,
     riskLevel: highFlags.length > 0 ? 'HIGH' : 
-               (mediumFlags.length > 0 || openLiens.length > 0) ? 'MEDIUM' : 'LOW'
+               (mediumFlags.length > 0 || openLiens.length > 0 || mortgageAnalysis.open.length > 1) ? 'MEDIUM' : 'LOW'
   };
 }
 
