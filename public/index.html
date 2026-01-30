@@ -54,6 +54,47 @@
       color: #1e3a5f;
     }
     
+    /* Search Type Toggle */
+    .search-type-toggle {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 25px;
+      background: #f7fafc;
+      padding: 5px;
+      border-radius: 10px;
+    }
+    
+    .search-type-btn {
+      flex: 1;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: transparent;
+      color: #666;
+    }
+    
+    .search-type-btn.active {
+      background: #2c5282;
+      color: white;
+      box-shadow: 0 2px 8px rgba(44, 82, 130, 0.3);
+    }
+    
+    .search-type-btn:not(.active):hover {
+      background: #e2e8f0;
+    }
+    
+    .search-form {
+      display: none;
+    }
+    
+    .search-form.active {
+      display: block;
+    }
+    
     .form-row {
       display: flex;
       gap: 20px;
@@ -85,6 +126,12 @@
       border-color: #2c5282;
     }
     
+    .form-hint {
+      font-size: 13px;
+      color: #718096;
+      margin-top: 5px;
+    }
+    
     .btn {
       background: #2c5282;
       color: white;
@@ -104,6 +151,113 @@
     .btn:disabled {
       background: #a0aec0;
       cursor: not-allowed;
+    }
+    
+    .btn-secondary {
+      background: #718096;
+    }
+    
+    .btn-secondary:hover {
+      background: #4a5568;
+    }
+    
+    /* Address Results Panel */
+    .address-results {
+      display: none;
+      background: #edf2f7;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .address-results.visible {
+      display: block;
+    }
+    
+    .address-results h3 {
+      color: #2d3748;
+      margin-bottom: 15px;
+      font-size: 1.1rem;
+    }
+    
+    .property-card {
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 12px;
+      border-left: 4px solid #2c5282;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .property-card:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      transform: translateX(5px);
+    }
+    
+    .property-card.selected {
+      border-left-color: #38a169;
+      background: #f0fff4;
+    }
+    
+    .property-address {
+      font-weight: 600;
+      color: #1e3a5f;
+      margin-bottom: 5px;
+    }
+    
+    .property-owner {
+      color: #2d3748;
+      font-size: 0.95rem;
+    }
+    
+    .property-details {
+      display: flex;
+      gap: 20px;
+      margin-top: 8px;
+      font-size: 0.85rem;
+      color: #718096;
+    }
+    
+    .no-results {
+      text-align: center;
+      padding: 30px;
+      color: #718096;
+    }
+    
+    .no-results .emoji {
+      font-size: 2rem;
+      margin-bottom: 10px;
+    }
+    
+    /* Step Indicator */
+    .step-indicator {
+      display: none;
+      background: #ebf8ff;
+      border: 1px solid #90cdf4;
+      border-radius: 8px;
+      padding: 15px 20px;
+      margin-bottom: 20px;
+      color: #2c5282;
+    }
+    
+    .step-indicator.visible {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .step-indicator .step-icon {
+      font-size: 1.5rem;
+    }
+    
+    .step-indicator .step-text {
+      flex: 1;
+    }
+    
+    .step-indicator .step-text strong {
+      display: block;
+      margin-bottom: 2px;
     }
     
     .results {
@@ -304,12 +458,25 @@
   <main class="container">
     <div class="search-box">
       <h2>Search Property Records</h2>
-      <form id="searchForm">
+      
+      <!-- Search Type Toggle -->
+      <div class="search-type-toggle">
+        <button type="button" class="search-type-btn active" data-type="name">
+          👤 Search by Owner Name
+        </button>
+        <button type="button" class="search-type-btn" data-type="address">
+          📍 Search by Address
+        </button>
+      </div>
+      
+      <!-- Name Search Form -->
+      <form id="nameSearchForm" class="search-form active">
         <div class="form-row">
           <div class="form-group" style="flex: 2;">
             <label for="ownerName">Property Owner Name</label>
             <input type="text" id="ownerName" name="ownerName" 
                    placeholder="Enter owner name (e.g., SMITH JOHN)" required>
+            <p class="form-hint">Enter name as: LASTNAME FIRSTNAME or as shown on deed</p>
           </div>
           <div class="form-group">
             <label for="yearsBack">Years to Search</label>
@@ -322,13 +489,51 @@
             </select>
           </div>
         </div>
-        <button type="submit" class="btn" id="searchBtn">Search Records</button>
+        <button type="submit" class="btn" id="nameSearchBtn">Search Records</button>
       </form>
+      
+      <!-- Address Search Form -->
+      <form id="addressSearchForm" class="search-form">
+        <div class="form-row">
+          <div class="form-group" style="flex: 2;">
+            <label for="propertyAddress">Property Address</label>
+            <input type="text" id="propertyAddress" name="propertyAddress" 
+                   placeholder="Enter property address (e.g., 123 MAIN ST)" required>
+            <p class="form-hint">Enter the street address to find the property owner</p>
+          </div>
+          <div class="form-group">
+            <label for="addressYearsBack">Years to Search</label>
+            <select id="addressYearsBack" name="yearsBack">
+              <option value="10">10 years</option>
+              <option value="20">20 years</option>
+              <option value="30" selected>30 years</option>
+              <option value="40">40 years</option>
+              <option value="50">50 years</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn" id="addressSearchBtn">Find Property Owner</button>
+      </form>
+      
+      <!-- Step Indicator (shows when address search finds owner) -->
+      <div class="step-indicator" id="stepIndicator">
+        <span class="step-icon">✅</span>
+        <div class="step-text">
+          <strong>Property Owner Found!</strong>
+          <span id="foundOwnerText">Now searching clerk records for this owner...</span>
+        </div>
+      </div>
+      
+      <!-- Address Search Results -->
+      <div class="address-results" id="addressResults">
+        <h3>📋 Select a Property to Search</h3>
+        <div id="propertyList"></div>
+      </div>
     </div>
     
     <div class="loading" id="loading">
       <div class="spinner"></div>
-      <p>Searching Hillsborough County records...</p>
+      <p id="loadingText">Searching Hillsborough County records...</p>
     </div>
     
     <div class="results" id="results">
@@ -353,10 +558,33 @@
   </main>
   
   <script>
-    const form = document.getElementById('searchForm');
+    // Elements
+    const nameSearchForm = document.getElementById('nameSearchForm');
+    const addressSearchForm = document.getElementById('addressSearchForm');
     const loading = document.getElementById('loading');
+    const loadingText = document.getElementById('loadingText');
     const results = document.getElementById('results');
-    const searchBtn = document.getElementById('searchBtn');
+    const addressResults = document.getElementById('addressResults');
+    const propertyList = document.getElementById('propertyList');
+    const stepIndicator = document.getElementById('stepIndicator');
+    const foundOwnerText = document.getElementById('foundOwnerText');
+    
+    // Search type toggle
+    document.querySelectorAll('.search-type-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.search-type-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        document.querySelectorAll('.search-form').forEach(f => f.classList.remove('active'));
+        const formId = btn.dataset.type === 'name' ? 'nameSearchForm' : 'addressSearchForm';
+        document.getElementById(formId).classList.add('active');
+        
+        // Hide results when switching
+        addressResults.classList.remove('visible');
+        stepIndicator.classList.remove('visible');
+        results.classList.remove('visible');
+      });
+    });
     
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
@@ -368,18 +596,110 @@
       });
     });
     
-    form.addEventListener('submit', async (e) => {
+    // Name search form submit
+    nameSearchForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      
       const ownerName = document.getElementById('ownerName').value.trim();
       const yearsBack = document.getElementById('yearsBack').value;
       
       if (!ownerName) return;
+      await performNameSearch(ownerName, yearsBack);
+    });
+    
+    // Address search form submit
+    addressSearchForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const address = document.getElementById('propertyAddress').value.trim();
       
-      // Show loading
+      if (!address) return;
+      await performAddressSearch(address);
+    });
+    
+    // Address search - find properties
+    async function performAddressSearch(address) {
       loading.classList.add('visible');
+      loadingText.textContent = 'Searching property records...';
       results.classList.remove('visible');
-      searchBtn.disabled = true;
+      addressResults.classList.remove('visible');
+      stepIndicator.classList.remove('visible');
+      document.getElementById('addressSearchBtn').disabled = true;
+      
+      try {
+        const response = await fetch('/api/address', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.error || 'Search failed');
+        }
+        
+        displayAddressResults(data.results);
+        
+      } catch (error) {
+        alert('Error: ' + error.message);
+      } finally {
+        loading.classList.remove('visible');
+        document.getElementById('addressSearchBtn').disabled = false;
+      }
+    }
+    
+    // Display address search results
+    function displayAddressResults(properties) {
+      if (!properties || properties.length === 0) {
+        propertyList.innerHTML = `
+          <div class="no-results">
+            <div class="emoji">🏠</div>
+            <p>No properties found for this address.</p>
+            <p>Try a partial address or different spelling.</p>
+          </div>
+        `;
+        addressResults.classList.add('visible');
+        return;
+      }
+      
+      propertyList.innerHTML = properties.map((prop, index) => `
+        <div class="property-card" onclick="selectProperty(${index})" data-owner="${encodeURIComponent(prop.ownerName)}">
+          <div class="property-address">${prop.address}</div>
+          <div class="property-owner">👤 ${prop.ownerName}</div>
+          <div class="property-details">
+            <span>📋 Folio: ${prop.folioNumber || 'N/A'}</span>
+            ${prop.totalValue ? `<span>💰 Value: ${formatMoney(prop.totalValue)}</span>` : ''}
+            ${prop.yearBuilt ? `<span>🏗️ Built: ${prop.yearBuilt}</span>` : ''}
+          </div>
+        </div>
+      `).join('');
+      
+      addressResults.classList.add('visible');
+    }
+    
+    // Select property and search by owner name
+    async function selectProperty(index) {
+      const cards = document.querySelectorAll('.property-card');
+      cards.forEach(c => c.classList.remove('selected'));
+      cards[index].classList.add('selected');
+      
+      const ownerName = decodeURIComponent(cards[index].dataset.owner);
+      const address = cards[index].querySelector('.property-address').textContent;
+      const yearsBack = document.getElementById('addressYearsBack').value;
+      
+      // Show step indicator
+      stepIndicator.classList.add('visible');
+      foundOwnerText.innerHTML = `Found owner: <strong>${ownerName}</strong> at ${address}. Searching clerk records...`;
+      
+      // Perform name search
+      await performNameSearch(ownerName, yearsBack);
+    }
+    
+    // Name search
+    async function performNameSearch(ownerName, yearsBack) {
+      loading.classList.add('visible');
+      loadingText.textContent = `Searching clerk records for "${ownerName}"...`;
+      results.classList.remove('visible');
+      document.getElementById('nameSearchBtn').disabled = true;
       
       try {
         const response = await fetch('/api/search', {
@@ -399,9 +719,9 @@
         alert('Error: ' + error.message);
       } finally {
         loading.classList.remove('visible');
-        searchBtn.disabled = false;
+        document.getElementById('nameSearchBtn').disabled = false;
       }
-    });
+    }
     
     function displayResults(data) {
       results.classList.add('visible');
@@ -638,7 +958,7 @@
     
     function formatMoney(amount) {
       if (!amount || amount === 0) return '-';
-      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
     }
     
     function getBadgeClass(type) {

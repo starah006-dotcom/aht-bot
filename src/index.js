@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { performTitleSearch } from './search/titleSearch.js';
 import { getPdfUrl, downloadPdf } from './api/hillsborough.js';
+import { searchByAddress } from './api/propertyAppraiser.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +49,33 @@ app.post('/api/search', async (req, res) => {
     res.json(results);
   } catch (error) {
     console.error('Search error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/address
+ * Search property appraiser by address
+ */
+app.post('/api/address', async (req, res) => {
+  try {
+    const { address } = req.body;
+    
+    if (!address || address.trim().length < 3) {
+      return res.status(400).json({ error: 'Address must be at least 3 characters' });
+    }
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`Address Search Request: ${address}`);
+    console.log(`${'='.repeat(60)}`);
+    
+    const results = await searchByAddress(address);
+    
+    console.log(`Found ${results.length} properties`);
+    
+    res.json({ results, count: results.length });
+  } catch (error) {
+    console.error('Address search error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -98,6 +126,7 @@ app.listen(PORT, () => {
 ║                                                            ║
 ║   Endpoints:                                               ║
 ║   - POST /api/search     - Search by owner name            ║
+║   - POST /api/address    - Search by property address      ║
 ║   - GET  /api/document/:id - View document PDF             ║
 ║   - GET  /health         - Health check                    ║
 ╚════════════════════════════════════════════════════════════╝
