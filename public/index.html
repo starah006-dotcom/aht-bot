@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClearView Title Search</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      line-height: 1.6;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    header {
+      background: linear-gradient(135deg, #1e3a5f, #2c5282);
+      color: white;
+      padding: 30px 0;
+      margin-bottom: 30px;
+    }
+    
+    header h1 {
+      font-size: 2rem;
+      font-weight: 600;
+    }
+    
+    header p {
+      opacity: 0.9;
+      margin-top: 5px;
+    }
+    
+    .search-box {
+      background: white;
+      border-radius: 12px;
+      padding: 30px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      margin-bottom: 30px;
+    }
+    
+    .search-box h2 {
+      margin-bottom: 20px;
+      color: #1e3a5f;
+    }
+    
+    .form-row {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .form-group {
+      flex: 1;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #555;
+    }
+    
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 12px 15px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.2s;
+    }
+    
+    .form-group input:focus, .form-group select:focus {
+      outline: none;
+      border-color: #2c5282;
+    }
+    
+    .btn {
+      background: #2c5282;
+      color: white;
+      border: none;
+      padding: 14px 30px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    .btn:hover {
+      background: #1e3a5f;
+    }
+    
+    .btn:disabled {
+      background: #a0aec0;
+      cursor: not-allowed;
+    }
+    
+    .results {
+      display: none;
+    }
+    
+    .results.visible {
+      display: block;
+    }
+    
+    .summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    
+    .card h3 {
+      font-size: 0.9rem;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .card .value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #1e3a5f;
+      margin-top: 5px;
+    }
+    
+    .card.risk-high .value { color: #c53030; }
+    .card.risk-medium .value { color: #d69e2e; }
+    .card.risk-low .value { color: #38a169; }
+    
+    .section {
+      background: white;
+      border-radius: 12px;
+      padding: 25px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    
+    .section h2 {
+      color: #1e3a5f;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e2e8f0;
+    }
+    
+    .flags {
+      margin-bottom: 20px;
+    }
+    
+    .flag {
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    
+    .flag.high {
+      background: #fed7d7;
+      border-left: 4px solid #c53030;
+    }
+    
+    .flag.medium {
+      background: #fefcbf;
+      border-left: 4px solid #d69e2e;
+    }
+    
+    .flag-icon {
+      font-size: 1.5rem;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    
+    th {
+      background: #f7fafc;
+      font-weight: 600;
+      color: #4a5568;
+    }
+    
+    tr:hover {
+      background: #f7fafc;
+    }
+    
+    .doc-link {
+      color: #2c5282;
+      text-decoration: none;
+    }
+    
+    .doc-link:hover {
+      text-decoration: underline;
+    }
+    
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    
+    .badge-deed { background: #c6f6d5; color: #22543d; }
+    .badge-mtg { background: #bee3f8; color: #2a4365; }
+    .badge-sat { background: #c6f6d5; color: #22543d; }
+    .badge-lien { background: #fed7d7; color: #742a2a; }
+    .badge-lp { background: #feb2b2; color: #742a2a; }
+    .badge-other { background: #e2e8f0; color: #4a5568; }
+    
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 40px;
+    }
+    
+    .loading.visible {
+      display: block;
+    }
+    
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid #e2e8f0;
+      border-top-color: #2c5282;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 20px;
+    }
+    
+    .tab {
+      padding: 10px 20px;
+      background: #e2e8f0;
+      border: none;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      font-weight: 500;
+      color: #4a5568;
+    }
+    
+    .tab.active {
+      background: white;
+      color: #1e3a5f;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #718096;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>🏠 ClearView Title Search</h1>
+      <p>Hillsborough County, Florida Public Records</p>
+    </div>
+  </header>
+  
+  <main class="container">
+    <div class="search-box">
+      <h2>Search Property Records</h2>
+      <form id="searchForm">
+        <div class="form-row">
+          <div class="form-group" style="flex: 2;">
+            <label for="ownerName">Property Owner Name</label>
+            <input type="text" id="ownerName" name="ownerName" 
+                   placeholder="Enter owner name (e.g., SMITH JOHN)" required>
+          </div>
+          <div class="form-group">
+            <label for="yearsBack">Years to Search</label>
+            <select id="yearsBack" name="yearsBack">
+              <option value="10">10 years</option>
+              <option value="20">20 years</option>
+              <option value="30" selected>30 years</option>
+              <option value="40">40 years</option>
+              <option value="50">50 years</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn" id="searchBtn">Search Records</button>
+      </form>
+    </div>
+    
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p>Searching Hillsborough County records...</p>
+    </div>
+    
+    <div class="results" id="results">
+      <div class="summary-cards" id="summaryCards"></div>
+      
+      <div class="flags" id="flags"></div>
+      
+      <div class="section">
+        <div class="tabs">
+          <button class="tab active" data-tab="chain">Chain of Title</button>
+          <button class="tab" data-tab="mortgages">Mortgages</button>
+          <button class="tab" data-tab="liens">Liens</button>
+          <button class="tab" data-tab="all">All Documents</button>
+        </div>
+        
+        <div class="tab-content active" id="tab-chain"></div>
+        <div class="tab-content" id="tab-mortgages"></div>
+        <div class="tab-content" id="tab-liens"></div>
+        <div class="tab-content" id="tab-all"></div>
+      </div>
+    </div>
+  </main>
+  
+  <script>
+    const form = document.getElementById('searchForm');
+    const loading = document.getElementById('loading');
+    const results = document.getElementById('results');
+    const searchBtn = document.getElementById('searchBtn');
+    
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+      });
+    });
+    
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const ownerName = document.getElementById('ownerName').value.trim();
+      const yearsBack = document.getElementById('yearsBack').value;
+      
+      if (!ownerName) return;
+      
+      // Show loading
+      loading.classList.add('visible');
+      results.classList.remove('visible');
+      searchBtn.disabled = true;
+      
+      try {
+        const response = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ownerName, yearsBack })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          displayResults(data);
+        } else {
+          alert('Search failed: ' + (data.error || 'Unknown error'));
+        }
+      } catch (error) {
+        alert('Error: ' + error.message);
+      } finally {
+        loading.classList.remove('visible');
+        searchBtn.disabled = false;
+      }
+    });
+    
+    function displayResults(data) {
+      results.classList.add('visible');
+      
+      // Summary cards
+      const summary = data.summary;
+      const riskClass = `risk-${summary.riskLevel.toLowerCase()}`;
+      
+      document.getElementById('summaryCards').innerHTML = `
+        <div class="card">
+          <h3>Total Documents</h3>
+          <div class="value">${summary.totalDocuments}</div>
+        </div>
+        <div class="card">
+          <h3>Chain of Title</h3>
+          <div class="value">${summary.chainOfTitleLength} deeds</div>
+        </div>
+        <div class="card">
+          <h3>Open Mortgages</h3>
+          <div class="value">${summary.openMortgages}</div>
+        </div>
+        <div class="card">
+          <h3>Open Liens</h3>
+          <div class="value">${summary.openLiens}</div>
+        </div>
+        <div class="card ${riskClass}">
+          <h3>Risk Level</h3>
+          <div class="value">${summary.riskLevel}</div>
+        </div>
+      `;
+      
+      // Flags
+      const flagsHtml = data.flags.map(flag => `
+        <div class="flag ${flag.severity}">
+          <span class="flag-icon">${flag.severity === 'high' ? '⚠️' : '⚡'}</span>
+          <div>
+            <strong>${flag.type.replace(/_/g, ' ').toUpperCase()}</strong>
+            <p>${flag.message}</p>
+          </div>
+        </div>
+      `).join('');
+      document.getElementById('flags').innerHTML = flagsHtml;
+      
+      // Chain of Title tab
+      if (data.chainOfTitle.length > 0) {
+        document.getElementById('tab-chain').innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Date</th>
+                <th>Grantor(s)</th>
+                <th>Grantee(s)</th>
+                <th>Sales Price</th>
+                <th>Document</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.chainOfTitle.map(deed => `
+                <tr>
+                  <td>${deed.sequence}</td>
+                  <td>${deed.date}</td>
+                  <td>${truncate(deed.grantors, 40)}</td>
+                  <td>${truncate(deed.grantees, 40)}</td>
+                  <td>${formatMoney(deed.salesPrice)}</td>
+                  <td><a href="/api/document/${encodeURIComponent(deed.documentId)}" 
+                         target="_blank" class="doc-link">View PDF</a></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      } else {
+        document.getElementById('tab-chain').innerHTML = '<div class="empty-state">No deeds found</div>';
+      }
+      
+      // Mortgages tab
+      const mortgages = data.grouped.mortgages || [];
+      const satisfactions = data.grouped.satisfactions || [];
+      
+      if (mortgages.length > 0 || satisfactions.length > 0) {
+        document.getElementById('tab-mortgages').innerHTML = `
+          <h3>Mortgages (${mortgages.length})</h3>
+          ${mortgages.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Mortgagor(s)</th>
+                  <th>Mortgagee(s)</th>
+                  <th>Status</th>
+                  <th>Document</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${mortgages.map(mtg => {
+                  const isOpen = data.mortgageAnalysis.open.some(o => o.instrumentNumber === mtg.instrumentNumber);
+                  return `
+                    <tr>
+                      <td>${mtg.recordDate}</td>
+                      <td>${truncate(mtg.grantors.join(', '), 40)}</td>
+                      <td>${truncate(mtg.grantees.join(', '), 40)}</td>
+                      <td><span class="badge ${isOpen ? 'badge-lien' : 'badge-sat'}">${isOpen ? 'OPEN' : 'SATISFIED'}</span></td>
+                      <td><a href="/api/document/${encodeURIComponent(mtg.documentId)}" 
+                             target="_blank" class="doc-link">View PDF</a></td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          ` : ''}
+          
+          <h3 style="margin-top: 30px;">Satisfactions (${satisfactions.length})</h3>
+          ${satisfactions.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Parties</th>
+                  <th>Document</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${satisfactions.map(sat => `
+                  <tr>
+                    <td>${sat.recordDate}</td>
+                    <td>${truncate([...sat.grantors, ...sat.grantees].join(', '), 60)}</td>
+                    <td><a href="/api/document/${encodeURIComponent(sat.documentId)}" 
+                           target="_blank" class="doc-link">View PDF</a></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="empty-state">No satisfactions found</div>'}
+        `;
+      } else {
+        document.getElementById('tab-mortgages').innerHTML = '<div class="empty-state">No mortgages found</div>';
+      }
+      
+      // Liens tab
+      const liens = [...(data.grouped.liens || []), ...(data.grouped.judgments || [])];
+      const lisPendens = data.grouped.lisPendens || [];
+      
+      if (liens.length > 0 || lisPendens.length > 0) {
+        document.getElementById('tab-liens').innerHTML = `
+          ${lisPendens.length > 0 ? `
+            <h3>⚠️ Lis Pendens (${lisPendens.length})</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Parties</th>
+                  <th>Document</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${lisPendens.map(lp => `
+                  <tr>
+                    <td>${lp.recordDate}</td>
+                    <td>${truncate([...lp.grantors, ...lp.grantees].join(', '), 60)}</td>
+                    <td><a href="/api/document/${encodeURIComponent(lp.documentId)}" 
+                           target="_blank" class="doc-link">View PDF</a></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : ''}
+          
+          <h3 style="margin-top: 30px;">Liens & Judgments (${liens.length})</h3>
+          ${liens.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Parties</th>
+                  <th>Status</th>
+                  <th>Document</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${liens.map(lien => {
+                  const isOpen = data.openLiens.some(o => o.instrumentNumber === lien.instrumentNumber);
+                  return `
+                    <tr>
+                      <td>${lien.recordDate}</td>
+                      <td><span class="badge badge-lien">${lien.docTypeShort}</span></td>
+                      <td>${truncate([...lien.grantors, ...lien.grantees].join(', '), 50)}</td>
+                      <td><span class="badge ${isOpen ? 'badge-lien' : 'badge-sat'}">${isOpen ? 'OPEN' : 'RELEASED'}</span></td>
+                      <td><a href="/api/document/${encodeURIComponent(lien.documentId)}" 
+                             target="_blank" class="doc-link">View PDF</a></td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="empty-state">No liens found</div>'}
+        `;
+      } else {
+        document.getElementById('tab-liens').innerHTML = '<div class="empty-state">No liens or lis pendens found</div>';
+      }
+      
+      // All documents tab
+      document.getElementById('tab-all').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Type</th>
+              <th>Instrument #</th>
+              <th>Parties</th>
+              <th>Document</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.documents.map(doc => `
+              <tr>
+                <td>${doc.recordDate}</td>
+                <td><span class="badge badge-${getBadgeClass(doc.docTypeShort)}">${doc.docTypeShort}</span></td>
+                <td>${doc.instrumentNumber}</td>
+                <td>${truncate([...doc.grantors, ...doc.grantees].join(' → '), 50)}</td>
+                <td><a href="/api/document/${encodeURIComponent(doc.documentId)}" 
+                       target="_blank" class="doc-link">View PDF</a></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    function truncate(str, len) {
+      return str.length > len ? str.substring(0, len) + '...' : str;
+    }
+    
+    function formatMoney(amount) {
+      if (!amount || amount === 0) return '-';
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+    }
+    
+    function getBadgeClass(type) {
+      switch(type) {
+        case 'D': return 'deed';
+        case 'MTG': case 'MTGREV': return 'mtg';
+        case 'SAT': return 'sat';
+        case 'LN': case 'JUD': case 'MEDLN': return 'lien';
+        case 'LP': return 'lp';
+        default: return 'other';
+      }
+    }
+  </script>
+</body>
+</html>
