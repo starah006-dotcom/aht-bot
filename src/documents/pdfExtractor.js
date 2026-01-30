@@ -1,36 +1,147 @@
 /**
  * PDF Text Extraction (Node.js version)
  * Extracts text from PDF documents for analysis
- * Note: For Cloudflare Pages, use the client-side version at /public/js/pdfScanner.js
+ * Falls back to Tesseract OCR for scanned documents
  */
 
 import pdfParse from 'pdf-parse';
+import Tesseract from 'tesseract.js';
 import { downloadPdf } from '../api/hillsborough.js';
+import { fromBuffer } from 'pdf2pic';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+
+// Tesseract worker (reused across calls)
+let tesseractWorker = null;
+
+/**
+ * Initialize Tesseract worker
+ */
+async function initTesseract() {
+  if (tesseractWorker) return tesseractWorker;
+  
+  tesseractWorker = await Tesseract.createWorker('eng', 1, {
+    logger: m => {
+      if (m.status === 'recognizing text') {
+        process.stdout.write(`\r[OCR] ${Math.round(m.progress * 100)}%`);
+      }
+    }
+  });
+  
+  return tesseractWorker;
+}
+
+/**
+ * Convert PDF page to image for OCR
+ * @param {Buffer} pdfBuffer PDF data
+ * @param {number} pageNum Page number (1-indexed)
+ * @returns {Promise<Buffer>} Image buffer
+ */
+async function pdfPageToImage(pdfBuffer, pageNum = 1) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pdf-ocr-'));
+  
+  try {
+    const convert = fromBuffer(pdfBuffer, {
+      density: 200,
+      saveFilename: 'page',
+      savePath: tempDir,
+      format: 'png',
+      width: 1600,
+      height: 2000
+    });
+    
+    const result = await convert(pageNum, { responseType: 'buffer' });
+    return result.buffer;
+  } finally {
+    // Clean up temp directory
+    try {
+      const files = await fs.readdir(tempDir);
+      for (const file of files) {
+        await fs.unlink(path.join(tempDir, file));
+      }
+      await fs.rmdir(tempDir);
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+/**
+ * Run OCR on an image buffer
+ * @param {Buffer} imageBuffer Image data
+ * @returns {Promise<string>} Extracted text
+ */
+async function runOCR(imageBuffer) {
+  const worker = await initTesseract();
+  const { data: { text } } = await worker.recognize(imageBuffer);
+  return text;
+}
 
 /**
  * Extract text from a document by its ID
  * @param {string} documentId The encoded document ID
+ * @param {Object} options Extraction options
+ * @param {boolean} options.enableOCR Enable OCR fallback
+ * @param {number} options.maxOCRPages Maximum pages to OCR
  * @returns {Promise<Object>} Extracted text and metadata
  */
-export async function extractTextFromDocument(documentId) {
+export async function extractTextFromDocument(documentId, options = {}) {
+  const { enableOCR = true, maxOCRPages = 3 } = options;
+  
   try {
     // Download the PDF
     const pdfBuffer = await downloadPdf(documentId);
+    const buffer = Buffer.from(pdfBuffer);
     
-    // Parse the PDF
-    const data = await pdfParse(Buffer.from(pdfBuffer));
+    // Try pdf-parse first
+    const data = await pdfParse(buffer);
     
     // Check if we got meaningful text
     const hasText = data.text && data.text.trim().length > 100;
     
+    let text = data.text;
+    let usedOCR = false;
+    
+    // If no text and OCR is enabled, try OCR
+    if (!hasText && enableOCR) {
+      console.log('\n[Scanner] No text layer found, attempting OCR...');
+      
+      try {
+        text = '';
+        const pagesToOCR = Math.min(data.numpages, maxOCRPages);
+        
+        for (let i = 1; i <= pagesToOCR; i++) {
+          console.log(`[OCR] Processing page ${i}/${pagesToOCR}...`);
+          
+          // Convert page to image
+          const imageBuffer = await pdfPageToImage(buffer, i);
+          
+          // Run OCR
+          const pageText = await runOCR(imageBuffer);
+          text += pageText + '\n';
+          
+          console.log(`\n[OCR] Page ${i}: ${pageText.length} chars extracted`);
+        }
+        
+        usedOCR = true;
+      } catch (ocrError) {
+        console.error('\n[OCR] Failed:', ocrError.message);
+        // Continue with empty text
+      }
+    }
+    
+    const finalHasText = text && text.trim().length > 100;
+    
     return {
       success: true,
-      text: data.text,
+      text,
       numPages: data.numpages,
       info: data.info,
       metadata: data.metadata,
-      hasText,
-      needsManualReview: !hasText
+      hasText: finalHasText,
+      usedOCR,
+      needsManualReview: !finalHasText
     };
   } catch (error) {
     console.error('PDF extraction error:', error);
@@ -340,14 +451,18 @@ export function parseSatisfactionText(text) {
  * Batch extract text from multiple documents
  * @param {Array} documents Array of document objects with documentId
  * @param {Function} onProgress Progress callback (scanned, total, current)
+ * @param {Object} options Extraction options
  * @returns {Promise<Object>} Batch extraction results
  */
-export async function batchExtractDocuments(documents, onProgress = () => {}) {
+export async function batchExtractDocuments(documents, onProgress = () => {}, options = {}) {
+  const { enableOCR = true, maxOCRPages = 3 } = options;
+  
   const results = {
     scanned: 0,
     successful: 0,
     failed: 0,
     needsManualReview: 0,
+    usedOCR: 0,
     documents: []
   };
   
@@ -358,13 +473,14 @@ export async function batchExtractDocuments(documents, onProgress = () => {}) {
     onProgress(i, total, doc);
     
     try {
-      const extraction = await extractTextFromDocument(doc.documentId);
+      const extraction = await extractTextFromDocument(doc.documentId, { enableOCR, maxOCRPages });
       
       const result = {
         ...doc,
         extraction: {
           success: extraction.success,
           hasText: extraction.hasText,
+          usedOCR: extraction.usedOCR || false,
           needsManualReview: extraction.needsManualReview
         }
       };
@@ -381,6 +497,9 @@ export async function batchExtractDocuments(documents, onProgress = () => {}) {
         }
         
         results.successful++;
+        if (extraction.usedOCR) {
+          results.usedOCR++;
+        }
       } else {
         results.needsManualReview++;
       }
@@ -428,7 +547,7 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
       
       // Method 1: Instrument number match (strongest)
       if (satData.satisfiedInstrumentNumber && mtg.instrumentNumber) {
-        if (satData.satisfiedInstrumentNumber === mtg.instrumentNumber) {
+        if (satData.satisfiedInstrumentNumber === String(mtg.instrumentNumber)) {
           score += 100;
           matchReasons.push('Instrument # exact match');
         }
@@ -510,11 +629,22 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
   };
 }
 
+/**
+ * Terminate Tesseract worker to free memory
+ */
+export async function terminateOCR() {
+  if (tesseractWorker) {
+    await tesseractWorker.terminate();
+    tesseractWorker = null;
+  }
+}
+
 export default {
   extractTextFromDocument,
   parseDeedText,
   parseMortgageText,
   parseSatisfactionText,
   batchExtractDocuments,
-  matchSatisfactionsToMortgages
+  matchSatisfactionsToMortgages,
+  terminateOCR
 };

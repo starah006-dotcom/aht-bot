@@ -6,6 +6,8 @@
   <title>AHT Bot Search</title>
   <!-- PDF.js for client-side PDF text extraction -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- Tesseract.js for OCR fallback on scanned documents -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <style>
     * {
       box-sizing: border-box;
@@ -728,6 +730,10 @@
               <div class="stat-label">Text Extracted</div>
             </div>
             <div class="stat">
+              <div class="stat-value" id="scanOCRCount">0</div>
+              <div class="stat-label">Used OCR</div>
+            </div>
+            <div class="stat">
               <div class="stat-value" id="scanReviewCount">0</div>
               <div class="stat-label">Needs Review</div>
             </div>
@@ -958,13 +964,26 @@
       scanSummary.classList.remove('visible');
       
       try {
-        const results = await PdfScanner.batchScanDocuments(docsToScan, (scanned, total, current) => {
+        const results = await PdfScanner.batchScanDocuments(docsToScan, (scanned, total, current, status) => {
           const pct = total > 0 ? (scanned / total * 100) : 0;
           document.getElementById('scanProgressBar').style.width = pct + '%';
-          document.getElementById('scanCount').textContent = `${scanned}/${total}`;
-          document.getElementById('scanStatus').textContent = current ? 
-            `Scanning: ${current.instrumentNumber || 'document'}...` : 'Complete!';
-        });
+          document.getElementById('scanCount').textContent = `${Math.floor(scanned)}/${total}`;
+          
+          let statusText = 'Scanning...';
+          if (current) {
+            const docNum = current.instrumentNumber || 'document';
+            switch (status) {
+              case 'downloading': statusText = `Downloading: ${docNum}...`; break;
+              case 'parsing': statusText = `Parsing: ${docNum}...`; break;
+              case 'extracting': statusText = `Extracting text: ${docNum}...`; break;
+              case 'ocr': statusText = `🔍 Running OCR: ${docNum}...`; break;
+              default: statusText = `Scanning: ${docNum}...`;
+            }
+          } else if (status === 'complete') {
+            statusText = 'Complete!';
+          }
+          document.getElementById('scanStatus').textContent = statusText;
+        }, { enableOCR: true });
         
         scannedData = results;
         
@@ -980,6 +999,7 @@
         
         // Update summary
         document.getElementById('scanSuccessCount').textContent = results.successful;
+        document.getElementById('scanOCRCount').textContent = results.usedOCR || 0;
         document.getElementById('scanReviewCount').textContent = results.needsManualReview;
         document.getElementById('matchedCount').textContent = matchResults.matches.length;
         
@@ -987,6 +1007,11 @@
         
         // Re-render mortgages tab with scan data
         renderMortgagesTab();
+        
+        // Clean up Tesseract worker to free memory
+        if (typeof PdfScanner.terminateOCR === 'function') {
+          await PdfScanner.terminateOCR();
+        }
         
       } catch (error) {
         console.error('Scan error:', error);

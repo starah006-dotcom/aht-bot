@@ -1,6 +1,7 @@
 /**
  * PDF Text Scanner (Client-side)
  * Uses PDF.js to extract text from PDFs for mortgage/satisfaction matching
+ * Falls back to Tesseract.js OCR for scanned documents
  */
 
 // Load PDF.js library
@@ -11,17 +12,90 @@ if (pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
 
+// Tesseract worker (loaded on demand)
+let tesseractWorker = null;
+let tesseractLoading = false;
+
+/**
+ * Initialize Tesseract worker
+ */
+async function initTesseract() {
+  if (tesseractWorker) return tesseractWorker;
+  if (tesseractLoading) {
+    // Wait for existing initialization
+    while (tesseractLoading) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return tesseractWorker;
+  }
+  
+  tesseractLoading = true;
+  try {
+    const { createWorker } = Tesseract;
+    tesseractWorker = await createWorker('eng', 1, {
+      logger: m => console.log('[Tesseract]', m.status, m.progress ? `${Math.round(m.progress * 100)}%` : '')
+    });
+    console.log('[OCR] Tesseract worker initialized');
+    return tesseractWorker;
+  } catch (error) {
+    console.error('[OCR] Failed to initialize Tesseract:', error);
+    throw error;
+  } finally {
+    tesseractLoading = false;
+  }
+}
+
+/**
+ * Render PDF page to canvas and get image data
+ * @param {Object} page PDF.js page object
+ * @param {number} scale Render scale (higher = better OCR but slower)
+ * @returns {Promise<string>} Data URL of rendered page
+ */
+async function renderPageToImage(page, scale = 2.0) {
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  
+  await page.render({
+    canvasContext: context,
+    viewport: viewport
+  }).promise;
+  
+  return canvas.toDataURL('image/png');
+}
+
+/**
+ * Run OCR on an image
+ * @param {string} imageData Data URL or image path
+ * @returns {Promise<string>} Extracted text
+ */
+async function runOCR(imageData) {
+  const worker = await initTesseract();
+  const { data: { text } } = await worker.recognize(imageData);
+  return text;
+}
+
 /**
  * Extract text from a PDF document
  * @param {string} documentId - The encoded document ID
+ * @param {Object} options - Extraction options
+ * @param {boolean} options.enableOCR - Enable OCR fallback for scanned docs
+ * @param {Function} options.onProgress - Progress callback
  * @returns {Promise<Object>} Extraction result
  */
-export async function extractTextFromDocument(documentId) {
+export async function extractTextFromDocument(documentId, options = {}) {
+  const { enableOCR = true, onProgress = () => {} } = options;
+  
   if (!pdfjsLib) {
     return { success: false, error: 'PDF.js not loaded', needsManualReview: true };
   }
   
   try {
+    onProgress('downloading', 0);
+    
     // Fetch PDF through our proxy to avoid CORS (using POST with JSON body)
     const response = await fetch('/api/scan', {
       method: 'POST',
@@ -47,29 +121,66 @@ export async function extractTextFromDocument(documentId) {
     }
     const arrayBuffer = bytes.buffer;
     
+    onProgress('parsing', 0.2);
+    
     // Load PDF with PDF.js
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     
     let fullText = '';
     const numPages = pdf.numPages;
     
-    // Extract text from each page
+    // First try: Extract text layer
+    onProgress('extracting', 0.3);
     for (let i = 1; i <= numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map(item => item.str).join(' ');
       fullText += pageText + '\n';
+      onProgress('extracting', 0.3 + (i / numPages) * 0.3);
     }
     
-    // Check if we got meaningful text (not a scanned image)
+    // Check if we got meaningful text
     const hasText = fullText.trim().length > 100;
+    
+    // If no text and OCR is enabled, try OCR
+    let usedOCR = false;
+    if (!hasText && enableOCR && typeof Tesseract !== 'undefined') {
+      console.log('[Scanner] No text layer found, attempting OCR...');
+      onProgress('ocr', 0.6);
+      
+      try {
+        fullText = '';
+        for (let i = 1; i <= Math.min(numPages, 3); i++) { // OCR first 3 pages max
+          const page = await pdf.getPage(i);
+          onProgress('ocr', 0.6 + (i / numPages) * 0.3);
+          
+          // Render page to image
+          const imageData = await renderPageToImage(page, 2.0);
+          
+          // Run OCR
+          const pageText = await runOCR(imageData);
+          fullText += pageText + '\n';
+          
+          console.log(`[OCR] Page ${i}/${numPages}: ${pageText.length} chars`);
+        }
+        usedOCR = true;
+      } catch (ocrError) {
+        console.error('[OCR] Failed:', ocrError);
+        // Continue with empty text - will be flagged as needs review
+      }
+    }
+    
+    const finalHasText = fullText.trim().length > 100;
+    
+    onProgress('complete', 1);
     
     return {
       success: true,
       text: fullText,
       numPages,
-      hasText,
-      needsManualReview: !hasText
+      hasText: finalHasText,
+      usedOCR,
+      needsManualReview: !finalHasText
     };
     
   } catch (error) {
@@ -84,7 +195,7 @@ export async function extractTextFromDocument(documentId) {
 
 /**
  * Parse mortgage document text to extract key information
- * @param {string} text - Raw PDF text
+ * @param {string} text Raw PDF text
  * @returns {Object} Extracted mortgage info
  */
 export function parseMortgageText(text) {
@@ -211,7 +322,7 @@ export function parseMortgageText(text) {
 
 /**
  * Parse deed document text to extract key information
- * @param {string} text - Raw PDF text
+ * @param {string} text Raw PDF text
  * @returns {Object} Extracted deed info
  */
 export function parseDeedText(text) {
@@ -309,7 +420,7 @@ export function parseDeedText(text) {
 
 /**
  * Parse satisfaction document text
- * @param {string} text - Raw PDF text
+ * @param {string} text Raw PDF text
  * @returns {Object} Extracted satisfaction info
  */
 export function parseSatisfactionText(text) {
@@ -406,15 +517,19 @@ export function parseSatisfactionText(text) {
 /**
  * Batch scan documents for text extraction
  * @param {Array} documents - Documents to scan (mortgages and satisfactions)
- * @param {Function} onProgress - Progress callback (scanned, total, current)
+ * @param {Function} onProgress - Progress callback (scanned, total, current, status)
+ * @param {Object} options - Scan options
  * @returns {Promise<Object>} Scan results with extracted data
  */
-export async function batchScanDocuments(documents, onProgress = () => {}) {
+export async function batchScanDocuments(documents, onProgress = () => {}, options = {}) {
+  const { enableOCR = true } = options;
+  
   const results = {
     scanned: 0,
     successful: 0,
     failed: 0,
     needsManualReview: 0,
+    usedOCR: 0,
     documents: []
   };
   
@@ -422,16 +537,22 @@ export async function batchScanDocuments(documents, onProgress = () => {}) {
   
   for (let i = 0; i < documents.length; i++) {
     const doc = documents[i];
-    onProgress(i, total, doc);
+    onProgress(i, total, doc, 'scanning');
     
     try {
-      const extraction = await extractTextFromDocument(doc.documentId);
+      const extraction = await extractTextFromDocument(doc.documentId, {
+        enableOCR,
+        onProgress: (status, progress) => {
+          onProgress(i + progress, total, doc, status);
+        }
+      });
       
       const result = {
         ...doc,
         extraction: {
           success: extraction.success,
           hasText: extraction.hasText,
+          usedOCR: extraction.usedOCR || false,
           needsManualReview: extraction.needsManualReview
         }
       };
@@ -447,6 +568,9 @@ export async function batchScanDocuments(documents, onProgress = () => {}) {
         }
         
         results.successful++;
+        if (extraction.usedOCR) {
+          results.usedOCR++;
+        }
       } else {
         results.needsManualReview++;
       }
@@ -465,10 +589,10 @@ export async function batchScanDocuments(documents, onProgress = () => {}) {
     results.scanned++;
     
     // Small delay to prevent overwhelming the browser
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 50));
   }
   
-  onProgress(total, total, null);
+  onProgress(total, total, null, 'complete');
   
   return results;
 }
@@ -497,7 +621,7 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
       
       // Method 1: Instrument number match (strongest)
       if (satData.satisfiedInstrumentNumber && mtg.instrumentNumber) {
-        if (satData.satisfiedInstrumentNumber === mtg.instrumentNumber) {
+        if (satData.satisfiedInstrumentNumber === String(mtg.instrumentNumber)) {
           score += 100;
           matchReasons.push('Instrument # exact match');
         }
@@ -506,8 +630,8 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
       // Method 2: Book/Page match
       if (satData.satisfiedBookPage && mtg.bookNum && mtg.pageNum) {
         const mtgBookPage = `Book ${mtg.bookNum}, Page ${mtg.pageNum}`;
-        if (satData.satisfiedBookPage.includes(mtg.bookNum) && 
-            satData.satisfiedBookPage.includes(mtg.pageNum)) {
+        if (satData.satisfiedBookPage.includes(String(mtg.bookNum)) && 
+            satData.satisfiedBookPage.includes(String(mtg.pageNum))) {
           score += 90;
           matchReasons.push('Book/Page match');
         }
@@ -582,6 +706,17 @@ export function matchSatisfactionsToMortgages(mortgages, satisfactions) {
   };
 }
 
+/**
+ * Terminate Tesseract worker to free memory
+ */
+export async function terminateOCR() {
+  if (tesseractWorker) {
+    await tesseractWorker.terminate();
+    tesseractWorker = null;
+    console.log('[OCR] Worker terminated');
+  }
+}
+
 // Export for browser use
 window.PdfScanner = {
   extractTextFromDocument,
@@ -589,5 +724,6 @@ window.PdfScanner = {
   parseDeedText,
   parseSatisfactionText,
   batchScanDocuments,
-  matchSatisfactionsToMortgages
+  matchSatisfactionsToMortgages,
+  terminateOCR
 };
